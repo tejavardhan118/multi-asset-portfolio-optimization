@@ -1,1 +1,356 @@
 # multi-asset-portfolio-optimization
+
+import  pandas as pd 
+import numpy as np 
+import math
+import matplotlib.pyplot as plt
+from scipy import stats
+import random
+
+# =============================================================================
+# Retrieving data
+# =============================================================================
+xlsx = pd.ExcelFile("U:\\Multiasset management\\Database.xlsx")
+dataset= {}
+for i in range(len(xlsx.sheet_names)):
+    dataset[xlsx.sheet_names[i]] = pd.read_excel(xlsx, xlsx.sheet_names[i], index_col=None, na_values=['NA'])
+    
+days_in_year= 12*20
+rf= 0.02/days_in_year
+no_years=int(dataset['X']['A1'].count()/(days_in_year))
+securities= len(dataset['X'].columns)     
+    
+# =============================================================================
+# Support Functions
+# =============================================================================
+def multiply(numbers):
+    total = 1
+    for x in numbers:
+        total *= x
+    return total
+
+def diff_lists(x1,x2):
+    x3= [None]*len(x1)
+    for i in range(len(x1)):
+        x3[i]=x1[i]-x2[i]
+    return x3
+
+def change(x1,x2):
+    x3= abs((x1-x2)/x1)
+    return x3
+
+def rand_weights(n):
+    ''' Produces n random weights that sum to 1 '''
+    k = np.random.rand(n)
+    return k / sum(k)
+
+w_capture= []
+
+def random_portfolio(returns):
+    ''' 
+    Returns the mean and standard deviation of returns for a random portfolio
+    '''
+
+    p = np.asmatrix(np.mean(returns, axis=1))
+    w = np.asmatrix(rand_weights(returns.shape[0]))
+    C = np.asmatrix(np.cov(returns))
+    
+    mu = w * p.T
+    sigma = np.sqrt(w * C * w.T)
+    
+    w_capture.append(w)
+    return  mu, sigma
+
+# =============================================================================
+# Weight Calculation
+# =============================================================================
+def eq_weights():
+    weights= [1/securities]*securities
+    return (weights)
+
+def gmv_weights(return_vec):
+    n_portfolios = 50000
+    means = np.column_stack([random_portfolio(return_vec)[0]
+    for _ in range(n_portfolios)
+    ])
+
+    stds= np.column_stack([
+    random_portfolio(return_vec)[1] 
+    for _ in range(n_portfolios)
+    ])
+
+    stds_mod= [stds[0,x] for x in range(n_portfolios)]
+
+    wts=[None]*securities
+    for i in range(securities):
+        wts[i]= w_capture[stds_mod.index(min(stds_mod))][0,i]
+    return wts
+
+def tang_weights(return_vec):
+    n_portfolios = 50000
+    means = np.column_stack([random_portfolio(return_vec)[0]
+    for _ in range(n_portfolios)
+    ])
+
+    stds= np.column_stack([
+    random_portfolio(return_vec)[1] 
+    for _ in range(n_portfolios)
+    ])
+
+    stds_mod= [stds[0,x] for x in range(n_portfolios)]
+    means_mod= [means[0,x] for x in range(n_portfolios)]
+    index_t=0
+    sr_max=0
+    for i in range(n_portfolios):
+        sr_curr= (means_mod[i]-rf)/(stds_mod[i])
+        if sr_curr>sr_max:
+            sr_max= sr_curr
+            index_t=i
+        
+    wts=[None]*securities
+    for i in range(securities):
+        wts[i]= w_capture[index_t][0,i]
+    return wts 
+
+def rpar_weights(data):
+    sum_var=0
+    for i in range(securities):
+        sum_var+= float(1/np.std(data[i]))
+    wts=[None]*securities
+    for i in range(securities):
+        wts[i]= float((1/np.std(data[i]))/sum_var)
+    return wts  
+
+# =============================================================================
+# Portfolio Methodology 
+# =============================================================================
+def equal_weighted(data):
+    month_ends=[None]*(12*(no_years-1)+1)
+    month_ends[0]=1000
+    weights= eq_weights()
+    weights1= eq_weights()
+    begin_date= days_in_year
+    index_ret1= [None]*(12*(no_years-1))
+    monthly_turnover= [None]*(12*(no_years-1))
+    for i in range(12*(no_years-1)):
+        ret=0
+        monthly_turnover[i]=0
+        for j in range(securities):
+            data_sec= data.iloc[(begin_date-20):(begin_date), j]+1
+            month_ret= multiply(data_sec.tolist())
+            ret+= (month_ret)*weights[0]
+            weights1[j]= weights1[j]*(month_ret)
+        sum_of_new_weights= sum(weights1)
+        weights2= [x/sum_of_new_weights for x in weights1]
+        monthly_turnover[i]= sum([abs(x) for x in diff_lists(weights2,weights)])    
+        index_ret1[i]=round(ret, 4)
+        month_ends[i+1]= month_ends[i]*index_ret1[i]
+        begin_date+=20
+
+    avg_turnover= np.mean(monthly_turnover)*100
+
+    #Sharpe_ratio:
+    an_ret1= stats.gmean(index_ret1)**12-1
+    an_std1= np.std(index_ret1)*math.sqrt(12)
+    sharpe1= (an_ret1-0.02)/an_std1
+    
+    #Max Drawdown
+    MDD=0
+    Draw_start=0
+    Draw_end=0
+    for i in range(len(month_ends)):
+        DD= change(month_ends[i],min(month_ends[i:]))
+        if DD>MDD:
+            MDD=DD
+            Draw_start=month_ends[i]
+            Draw_end=min(month_ends[i:])
+
+    #print answers
+    for i in range(len(month_ends)):
+        print(month_ends[i])
+    print()
+    print ("Max drawdown is", MDD*100, "%. Drop is from ", Draw_start,"to ", Draw_end)
+    print("Average turnover is ", avg_turnover, "%")
+    print ("Sharpe ratio of index is: ", sharpe1)
+    
+def gmv_weighted(data):
+    month_ends=[None]*(12*(no_years-1)+1)
+    month_ends[0]=1000
+    begin_date= days_in_year
+    weights= gmv_weights(data.iloc[begin_date-days_in_year:begin_date,].values.T)
+    if begin_date==days_in_year:
+        weights1= tang_weights(data.iloc[begin_date-days_in_year:begin_date,].values.T)
+    else:
+        weights1= tang_weights(data.iloc[(begin_date-days_in_year-20):(begin_date-20),].values.T)    
+    index_ret1= [None]*(12*(no_years-1))
+    monthly_turnover= [None]*(12*(no_years-1))
+    for i in range(12*(no_years-1)):
+        ret=0
+        monthly_turnover[i]=0
+        for j in range(securities):
+            data_sec= data.iloc[(begin_date-20):(begin_date), j]+1
+            month_ret= multiply(data_sec.tolist())-1
+            ret+= (month_ret)*weights[j]
+            weights1[j]= weights1[j]*(month_ret+1)
+        sum_of_new_weights= sum(weights1)
+        weights2= [x/sum_of_new_weights for x in weights1]
+        monthly_turnover[i]= sum([abs(x) for x in diff_lists(weights2,weights)])    
+        index_ret1[i]=round((ret+1), 4)
+        month_ends[i+1]= month_ends[i]*index_ret1[i]
+        begin_date+=20
+
+    avg_turnover= np.mean(monthly_turnover)*100
+
+    #Sharpe_ratio:
+    an_ret1= stats.gmean(index_ret1)**12-1
+    an_std1= np.std(index_ret1)*math.sqrt(12)
+    sharpe1= (an_ret1-0.02)/an_std1
+    
+    #Max Drawdown
+    MDD=0
+    Draw_start=0
+    Draw_end=0
+    for i in range(len(month_ends)):
+        DD= change(month_ends[i],min(month_ends[i:]))
+        if DD>MDD:
+            MDD=DD
+            Draw_start=month_ends[i]
+            Draw_end=min(month_ends[i:])
+
+    #print answers
+    for i in range(len(month_ends)):
+        print(month_ends[i])
+    print()
+    print ("Max drawdown is", MDD*100, "%. Drop is from ", Draw_start,"to ", Draw_end)
+    print("Average turnover is ", avg_turnover, "%")
+    print ("Sharpe ratio of index is: ", sharpe1)
+
+def tang_weighted(data):
+    month_ends=[None]*(12*(no_years-1)+1)
+    month_ends[0]=1000
+    begin_date= days_in_year
+    weights= tang_weights(data.iloc[begin_date-days_in_year:begin_date,].values.T)
+    if begin_date==days_in_year:
+        weights1= tang_weights(data.iloc[begin_date-days_in_year:begin_date,].values.T)
+    else:
+        weights1= tang_weights(data.iloc[(begin_date-days_in_year-20):(begin_date-20),].values.T)     
+    index_ret1= [None]*(12*(no_years-1))
+    monthly_turnover= [None]*(12*(no_years-1))
+    for i in range(12*(no_years-1)):
+        ret=0
+        monthly_turnover[i]=0
+        for j in range(securities):
+            data_sec= data.iloc[(begin_date-20):(begin_date), j]+1
+            month_ret= multiply(data_sec.tolist())-1
+            ret+= (month_ret)*weights[j]
+            weights1[j]= weights1[j]*(month_ret+1)
+        sum_of_new_weights= sum(weights1)
+        weights2= [x/sum_of_new_weights for x in weights1]
+        monthly_turnover[i]= sum([abs(x) for x in diff_lists(weights2,weights)])    
+        index_ret1[i]=round((ret+1), 4)
+        month_ends[i+1]= month_ends[i]*index_ret1[i]
+        begin_date+=20
+
+    avg_turnover= np.mean(monthly_turnover)*100
+
+    #Sharpe_ratio:
+    an_ret1= stats.gmean(index_ret1)**12-1
+    an_std1= np.std(index_ret1)*math.sqrt(12)
+    sharpe1= (an_ret1-0.02)/an_std1
+    
+    #Max Drawdown
+    MDD=0
+    Draw_start=0
+    Draw_end=0
+    for i in range(len(month_ends)):
+        DD= change(month_ends[i],min(month_ends[i:]))
+        if DD>MDD:
+            MDD=DD
+            Draw_start=month_ends[i]
+            Draw_end=min(month_ends[i:])
+
+    #print answers
+    for i in range(len(month_ends)):
+        print(month_ends[i])
+    print()
+    print ("Max drawdown is", MDD*100, "%. Drop is from ", Draw_start,"to ", Draw_end)
+    print("Average turnover is ", avg_turnover, "%")
+    print ("Sharpe ratio of index is: ", sharpe1)
+      
+def rpar_weighted(data):
+    month_ends=[None]*(12*(no_years-1)+1)
+    month_ends[0]=1000
+    begin_date= days_in_year
+    weights= rpar_weights(data.iloc[begin_date-days_in_year:begin_date,].values.T)
+    if begin_date==days_in_year:
+        weights1= rpar_weights(data.iloc[begin_date-days_in_year:begin_date,].values.T)
+    else:
+        weights1= rpar_weights(data.iloc[(begin_date-days_in_year-20):(begin_date-20),].values.T)   
+    index_ret1= [None]*(12*(no_years-1))
+    monthly_turnover= [None]*(12*(no_years-1))
+    for i in range(12*(no_years-1)):
+        ret=0
+        monthly_turnover[i]=0
+        for j in range(securities):
+            data_sec= data.iloc[(begin_date-20):(begin_date), j]+1
+            month_ret= multiply(data_sec.tolist())-1
+            ret+= (month_ret)*weights[j]
+            weights1[j]= weights1[j]*(month_ret+1)
+        sum_of_new_weights= sum(weights1)
+        weights2= [x/sum_of_new_weights for x in weights1]
+        monthly_turnover[i]= sum([abs(x) for x in diff_lists(weights2,weights)])    
+        index_ret1[i]=round((ret+1), 4)
+        month_ends[i+1]= month_ends[i]*index_ret1[i]
+        begin_date+=20
+
+    avg_turnover= np.mean(monthly_turnover)*100
+
+    #Sharpe_ratio:
+    an_ret1= stats.gmean(index_ret1)**12-1
+    an_std1= np.std(index_ret1)*math.sqrt(12)
+    sharpe1= (an_ret1-0.02)/an_std1
+    
+    #Max Drawdown
+    MDD=0
+    Draw_start=0
+    Draw_end=0
+    for i in range(len(month_ends)):
+        DD= change(month_ends[i],min(month_ends[i:]))
+        if DD>MDD:
+            MDD=DD
+            Draw_start=month_ends[i]
+            Draw_end=min(month_ends[i:])
+
+    #print answers
+    for i in range(len(month_ends)):
+        print(month_ends[i])
+    print()
+    print ("Max drawdown is", MDD*100, "%. Drop is from ", Draw_start,"to ", Draw_end)
+    print("Average turnover is ", avg_turnover, "%")
+    print ("Sharpe ratio of index is: ", sharpe1)
+
+
+
+# =============================================================================
+# Results
+# =============================================================================
+#equal_weighted(dataset["X"])
+#equal_weighted(dataset["Y"])
+#equal_weighted(dataset["X1"])
+#equal_weighted(dataset["Y1"])
+#
+#gmv_weighted(dataset["X"])
+#gmv_weighted(dataset["Y"])
+#gmv_weighted(dataset["X1"])
+#gmv_weighted(dataset["Y1"])
+#
+#tang_weighted(dataset["X"])
+#tang_weighted(dataset["Y"])
+#tang_weighted(dataset["X1"])
+#tang_weighted(dataset["Y1"])
+#
+rpar_weighted(dataset["X"])
+rpar_weighted(dataset["Y"])
+rpar_weighted(dataset["X1"])
+rpar_weighted(dataset["Y1"])
+
