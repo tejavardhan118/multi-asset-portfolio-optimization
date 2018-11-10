@@ -10,6 +10,8 @@ import random
 # =============================================================================
 # Retrieving data
 # =============================================================================
+
+
 xlsx = pd.ExcelFile("U:\\Multiasset management\\Database.xlsx")
 dataset= {}
 for i in range(len(xlsx.sheet_names)):
